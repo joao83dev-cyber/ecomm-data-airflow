@@ -1,0 +1,8 @@
+Instruções de configuração, execução, API, migrations, DAGs, integração Kafka e limites do projeto estão consolidadas no README.md.
+
+Início rápido no PowerShell:
+1. Copie .env.example para .env e substitua os segredos de exemplo.
+2. Execute docker compose up -d --build.
+3. Consulte docker compose ps e abra http://localhost:8000/docs ou http://localhost:8080.
+
+Não compartilhe nem versione .env, kubeconfig ou logs. Veja o README antes de executar docker compose down -v, pois remove os dados persistidos.
