@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
+import unittest
 from uuid import uuid4
 
-import pytest
 from pydantic import ValidationError
 
 from app.schemas import OrderEvent
@@ -24,21 +24,24 @@ def valid_event() -> dict:
     }
 
 
-def test_accepts_complete_approved_order_event() -> None:
-    event = OrderEvent.model_validate(valid_event())
-    assert event.status == "APPROVED"
-    assert event.items[0].quantity == 2
+class OrderEventSchemaTests(unittest.TestCase):
+    def test_accepts_complete_approved_order_event(self) -> None:
+        event = OrderEvent.model_validate(valid_event())
+        self.assertEqual(event.status, "APPROVED")
+        self.assertEqual(event.items[0].quantity, 2)
+
+    def test_rejects_empty_items(self) -> None:
+        payload = valid_event()
+        payload["items"] = []
+        with self.assertRaises(ValidationError):
+            OrderEvent.model_validate(payload)
+
+    def test_rejects_unexpected_fields(self) -> None:
+        payload = valid_event()
+        payload["untrusted_extra"] = "unexpected"
+        with self.assertRaises(ValidationError):
+            OrderEvent.model_validate(payload)
 
 
-def test_rejects_empty_items() -> None:
-    payload = valid_event()
-    payload["items"] = []
-    with pytest.raises(ValidationError):
-        OrderEvent.model_validate(payload)
-
-
-def test_rejects_unexpected_fields() -> None:
-    payload = valid_event()
-    payload["untrusted_extra"] = "unexpected"
-    with pytest.raises(ValidationError):
-        OrderEvent.model_validate(payload)
+if __name__ == "__main__":
+    unittest.main()

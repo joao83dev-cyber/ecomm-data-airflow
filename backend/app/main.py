@@ -36,10 +36,6 @@ class BodySizeLimitMiddleware:
             return
         try:
             await self._handle_request(scope, receive, send)
-        except Exception:
-            body = b'{"detail":"internal server error"}'
-            await send({"type": "http.response.start", "status": 500, "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
-            await send({"type": "http.response.body", "body": body})
         finally:
             self.semaphore.release()
 
