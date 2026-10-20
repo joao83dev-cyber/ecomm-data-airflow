@@ -1,0 +1,8 @@
+# Separate Kubernetes 1.35 cluster for local development.
+# Create with: kind create cluster --name airflow-k8s135 --image kindest/node:v1.35.0 --config k8s/kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

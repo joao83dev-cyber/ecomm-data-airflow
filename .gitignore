@@ -1,0 +1,17 @@
+k8s/kubeconfig
+.env
+.env.*
+!.env.example
+logs/
+plugins/
+config/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.log
+.coverage
+htmlcov/
+.idea/
+.vscode/

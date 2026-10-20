@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+!.env.example
+logs/*
+__pycache__
+*.pyc
+k8s/kubeconfig
+*.log
+.venv
+venv
