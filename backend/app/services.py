@@ -25,14 +25,13 @@ def persist_event(event: OrderEvent) -> bool:
         if inserted is None:
             return False
 
-        client_id = session.execute(
+        session.execute(
             insert(Client)
             .values(external_id=event.client.external_id, name=event.client.name, email=event.client.email)
-            .on_conflict_do_update(
-                index_elements=[Client.external_id],
-                set_={"name": event.client.name, "email": event.client.email, "updated_at": datetime.now(UTC)},
-            )
-            .returning(Client.id)
+            .on_conflict_do_nothing(index_elements=[Client.external_id])
+        )
+        client_id = session.execute(
+            select(Client.id).where(Client.external_id == event.client.external_id).with_for_update()
         ).scalar_one()
 
         session.execute(
@@ -80,6 +79,8 @@ def persist_event(event: OrderEvent) -> bool:
         if order is None:
             raise ValueError("order already exists under a different identifier")
         if inserted_order is None:
+            if order.client_id != client_id or order.customer_snapshot != event.client.model_dump(mode="json") or order.address_snapshot != event.address.model_dump(mode="json"):
+                raise ValueError("customer or address snapshot cannot be changed by a later order event")
             expected_items = [item.model_dump(mode="json") for item in event.items]
             if order.items_snapshot != expected_items or order.total_amount != order_total or order.currency != event.currency.upper():
                 raise ValueError("an existing order cannot be changed by a later event")
@@ -92,6 +93,11 @@ def persist_event(event: OrderEvent) -> bool:
                     )
                 )
         else:
+            session.execute(
+                update(Client)
+                .where(Client.id == client_id)
+                .values(name=event.client.name, email=event.client.email, updated_at=datetime.now(UTC))
+            )
             session.add_all([
                 OrderItem(order_id=event.order_id, line_number=index, **item.model_dump())
                 for index, item in enumerate(event.items, start=1)
@@ -100,12 +106,22 @@ def persist_event(event: OrderEvent) -> bool:
 
         previous_payment = session.execute(select(Payment).where(Payment.order_id == event.order_id).with_for_update()).scalar_one_or_none()
         if previous_payment is None:
-            session.add(Payment(order_id=event.order_id, provider_reference=event.payment.provider_reference, status=event.payment.status, amount=payment_amount))
+            session.add(Payment(
+                order_id=event.order_id,
+                provider_reference=event.payment.provider_reference,
+                status=event.payment.status,
+                provider_payload=event.payment.model_dump(mode="json"),
+                amount=payment_amount,
+            ))
         elif previous_payment.status == "PENDING" and event.payment.status in {"APPROVED", "DECLINED"}:
             previous_payment.status = event.payment.status
             previous_payment.provider_reference = event.payment.provider_reference or previous_payment.provider_reference
+            previous_payment.provider_payload = event.payment.model_dump(mode="json")
+            previous_payment.amount = payment_amount
         elif previous_payment.status != event.payment.status:
             raise ValueError("payment status cannot be changed after it is finalized")
+        elif previous_payment.amount != payment_amount:
+            raise ValueError("payment amount cannot be changed after it is finalized")
         if event.status == "APPROVED" and event.payment.status == "APPROVED":
             invoice_number = f"INV-{event.order_id}"
             session.execute(

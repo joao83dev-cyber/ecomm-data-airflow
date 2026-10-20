@@ -11,6 +11,11 @@ from airflow.sdk import dag, task, get_current_context
 ROWS_PER_RUN = int(os.getenv("BULK_ROWS", "10000000"))
 CHUNK_SIZE = int(os.getenv("BULK_CHUNK_SIZE", "25000"))
 
+try:
+    import psycopg
+except ImportError:  # The DAG processor should parse DAGs without a SQL driver.
+    psycopg = None
+
 
 def connection_string() -> str:
     return os.getenv(
@@ -30,6 +35,10 @@ def connection_string() -> str:
 def ecommerce_bulk_load_10m():
     @task(execution_timeout=None)
     def load_in_chunks() -> dict[str, int | float]:
+        if psycopg is None:
+            raise RuntimeError("psycopg must be installed in the Airflow image to run this task")
+        if ROWS_PER_RUN < 1 or CHUNK_SIZE < 1:
+            raise ValueError("BULK_ROWS and BULK_CHUNK_SIZE must both be positive")
         with psycopg.connect(connection_string(), connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE SCHEMA IF NOT EXISTS ecommerce")

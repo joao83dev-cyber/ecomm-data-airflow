@@ -26,7 +26,7 @@ O banco tem pool limitado (10 conexões + até 5 overflow, timeout de 10 s); nã
 
 ### Dados, histórico e imutabilidade
 
-O esquema `ecommerce` contém `clients`, `address` (versões imutáveis por cliente/endereço), `orders`, `order_items`, `payment`, `invoices`, `processed_events`, `order_event_history` e `outbox_events`. FKs usam `RESTRICT`; snapshots JSONB guardam cliente/endereço/itens como eram no pedido. Alterações cadastrais geram uma nova versão de endereço, e mudanças de status são registradas no histórico. Trigger PostgreSQL impede atualização/remoção de pedido fechado. Um pedido pendente pode avançar para estado terminal; depois de fechado, os snapshots/valores não podem ser alterados.
+O esquema `ecommerce` contém `clients`, `address` (versões imutáveis por cliente/endereço), `orders`, `order_items`, `payment`, `invoices`, `processed_events`, `order_event_history`, `dead_letter_events` e `outbox_events`. FKs usam `RESTRICT`; snapshots JSONB guardam cliente/endereço/itens como eram no pedido. Alterações cadastrais geram uma nova versão de endereço, e mudanças de status são registradas no histórico. Trigger PostgreSQL impede atualização/remoção de pedido fechado. Um pedido pendente pode avançar para estado terminal; depois de fechado, os snapshots/valores não podem ser alterados.
 
 ### Observação sobre SQL Server
 
@@ -35,19 +35,19 @@ A missão original pede especificamente SQL Server e técnicas Python↔SQL Serv
 ## Requisitos
 
 - Docker Desktop com Docker Compose v2 (Linux containers/WSL2 no Windows).
-- Pelo menos 6 GB RAM para Airflow, PostgreSQL e broker local; recomendado 8 GB.
+- Pelo menos 8 GB RAM para Airflow, PostgreSQL e broker local; recomendado 12 GB para executar simultaneamente o Airflow e Redpanda.
 - Para o cluster Kubernetes opcional: `kind` e `kubectl`.
 
 ## Configuração e execução
 
-1. Copie `.env.example` para `.env`, substitua todos os valores por segredos fortes e mantenha o arquivo fora do Git. Gere a chave Fernet conforme a documentação oficial do Airflow.
+1. Copie `.env.example` para `.env`, substitua todos os valores por segredos fortes e mantenha o arquivo fora do Git. Gere uma chave Fernet com `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
 2. Inicie a stack (inclui build da imagem FastAPI; Airflow pode ser construído se necessário):
 
 ```powershell
 Copy-Item .env.example .env
 # Edite .env antes de iniciar
- docker compose up -d --build
- docker compose ps
+docker compose up -d --build
+docker compose ps
 ```
 
 A migration Alembic roda automaticamente após PostgreSQL ficar saudável. Endpoints locais:
@@ -66,7 +66,7 @@ Para parar: `docker compose down`. `docker compose down -v` também apaga os dad
 
 `POST /webhooks/orders` recebe JSON com `event_id`, `order_id` UUID, `occurred_at`, `client`, `address`, `items`, `currency`, `status` e `payment`. Envie `Idempotency-Key` igual ao `event_id`. O payload é limitado a 256 KiB; os itens a 100 por pedido. Status suportados incluem `PENDING` e `APPROVED`; pagamento `PENDING`, `APPROVED` ou `DECLINED`. Valor pago precisa ser igual à soma dos itens. Resposta `202` confirma apenas que o evento foi persistido pelo broker, não que já foi gravado no PostgreSQL.
 
-Após um pedido aprovado e pago, o worker registra uma invoice e, na mesma transação, uma linha na outbox. A entrega HTTP usa retry exponencial persistido e `Idempotency-Key` baseado no ID do pedido. O consumidor externo real deve deduplicar essa chave duravelmente; o mock atual é demonstrativo e mantém estado apenas em memória. Garantia externa é *at-least-once*, não exactly-once através da rede.
+Após um pedido aprovado e pago, o worker registra uma invoice e, na mesma transação, uma linha na outbox. A entrega HTTP usa retry exponencial persistido e `Idempotency-Key` baseado no ID do pedido. O consumidor externo real deve deduplicar essa chave duravelmente; o mock atual é demonstrativo e mantém estado apenas em memória. Payloads inválidos vão para `dead_letter_events` antes do commit do offset. Garantia externa é *at-least-once*, não exactly-once através da rede.
 
 ## Migrações
 
@@ -74,11 +74,11 @@ Após um pedido aprovado e pago, o worker registra uma invoice e, na mesma trans
 docker compose run --rm backend-migrate
 ```
 
-Migrações ficam em `backend/alembic/versions`. Não altere migration já aplicada; crie uma nova revision para mudanças posteriores.
+Migrações ficam em `backend/alembic/versions`. A versão atual inclui `0001_ecommerce_schema`, `0002_related_immutable`, `0003_payment_payload` e `0004_dead_letter`. Não altere migration já aplicada; crie uma nova revision para mudanças posteriores.
 
 ## DAG de 10 milhões
 
-A DAG `ecommerce_bulk_load_10m` gera 10.000.000 linhas por execução manual. Usa `COPY` para uma tabela temporária em blocos de 25.000 registros e depois insere com `ON CONFLICT DO NOTHING`. A geração é streaming/bounded-memory; cada chunk faz commit, e IDs determinísticos tornam retries idempotentes. Ela não carrega os 10 milhões em XCom/memória. Inicie manualmente pela UI Airflow; `BULK_ROWS` e `BULK_CHUNK_SIZE` do `.env` permitem configurar execução menor para teste.
+A DAG `ecommerce_bulk_load_10m` gera 10.000.000 linhas por execução manual. Usa `COPY` para uma tabela temporária em blocos de 25.000 registros e depois insere com `ON CONFLICT DO NOTHING`. A geração é streaming/bounded-memory; cada chunk faz commit, e IDs determinísticos tornam retries idempotentes. Ela não carrega os 10 milhões em XCom/memória. O driver psycopg já está no Dockerfile da imagem Airflow; após incluir DAG/variáveis, reinicie o scheduler e o dag-processor (`docker compose up -d --no-build airflow-scheduler airflow-dag-processor`). Inicie manualmente pela UI; `BULK_ROWS` e `BULK_CHUNK_SIZE` do `.env` permitem configurar execução menor para teste.
 
 ## Cluster Kubernetes opcional
 
@@ -91,7 +91,7 @@ Este cluster não está conectado ao executor Airflow: a stack mantém `LocalExe
 
 ## Branches por etapa
 
-O trabalho deve ser separado em branches sequenciais: `stage/1-data-migrations`, `stage/2-kafka-ingestion`, `stage/3-airflow-bulk-load` e `stage/4-event-delivery`. Cada etapa parte da etapa anterior e só deve ser integrada após validação.
+Branches criadas no GitHub: `stage/1-data-migrations`, `stage/2-kafka-ingestion`, `stage/3-airflow-bulk-load` e `stage/4-event-delivery`. Cada etapa parte da etapa anterior; `main` reúne a implementação completa.
 
 ## Limites antes de produção
 

@@ -3,6 +3,7 @@ import asyncio
 from decimal import Decimal
 
 import orjson
+from aiokafka.errors import KafkaError
 from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.responses import ORJSONResponse
@@ -125,6 +126,6 @@ async def ingest_order(event: OrderEvent, idempotency_key: str | None = Header(d
         raise HTTPException(status_code=413, detail="event payload too large")
     try:
         await producer.send_and_wait(settings.kafka_topic, encoded, key=str(event.order_id).encode())
-    except Exception as exc:
+    except KafkaError as exc:
         raise HTTPException(status_code=503, detail="ingestion queue unavailable") from exc
     return IngestAccepted(event_id=event.event_id, status="queued")

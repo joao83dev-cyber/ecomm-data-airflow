@@ -5,7 +5,8 @@ from uuid import UUID
 import httpx
 import orjson
 from aiokafka import AIOKafkaConsumer
-from sqlalchemy import select, update
+from aiokafka.errors import CommitFailedError
+from sqlalchemy import select, text, update
 
 from app.config import settings
 from app.database import SessionLocal
@@ -27,13 +28,33 @@ async def consume_events() -> None:
     await consumer.start()
     try:
         async for message in consumer:
-            event = OrderEvent.model_validate_json(message.value)
-            # Commit offsets only after the database transaction commits. On a crash,
-            # Kafka redelivery is made harmless by processed_events(event_id).
-            await asyncio.to_thread(persist_event, event)
-            await consumer.commit()
+            try:
+                event = OrderEvent.model_validate_json(message.value)
+                # Commit offsets only after the database transaction commits. On a crash,
+                # Kafka redelivery is made harmless by processed_events(event_id).
+                await asyncio.to_thread(persist_event, event)
+            except (ValueError, TypeError) as exc:
+                await asyncio.to_thread(persist_dead_letter, message.value, str(exc)[:2000])
+                await consumer.commit()
+            except Exception:
+                # Leave the offset uncommitted so a transient database failure is retried.
+                continue
+            try:
+                await consumer.commit()
+            except CommitFailedError:
+                # The consumer group may be rebalancing; processing is idempotent.
+                continue
     finally:
         await consumer.stop()
+
+
+def persist_dead_letter(raw_payload: bytes, reason: str) -> None:
+    """Persist invalid messages for inspection before advancing Kafka offset."""
+    with SessionLocal.begin() as session:
+        session.execute(
+            text("INSERT INTO ecommerce.dead_letter_events (payload, reason) VALUES (:payload, :reason)"),
+            {"payload": raw_payload.decode("utf-8", errors="replace"), "reason": reason},
+        )
 
 
 async def deliver_outbox() -> None:
@@ -67,7 +88,7 @@ def claim_outbox_event():
             .order_by(OutboxEvent.created_at)
             .limit(1)
             .with_for_update(skip_locked=True)
-        ).scalar_one_or_none()
+        ).scalars().first()
         if row is None:
             return None, None, None, 0
         # Temporarily lease the row for 30 seconds. It stays retryable after crashes.

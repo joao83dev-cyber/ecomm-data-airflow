@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CustomerInput(BaseModel):
@@ -47,6 +47,14 @@ class OrderEvent(BaseModel):
     currency: str = Field(min_length=3, max_length=3)
     status: str = "PENDING"
     payment: PaymentInput
+
+    @model_validator(mode="after")
+    def validate_status_consistency(self):
+        if self.status == "APPROVED" and self.payment.status != "APPROVED":
+            raise ValueError("approved orders require an approved payment")
+        if self.status == "PENDING" and self.payment.status != "PENDING":
+            raise ValueError("pending orders require a pending payment")
+        return self
 
 
 class IngestAccepted(BaseModel):
