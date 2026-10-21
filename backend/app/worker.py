@@ -11,8 +11,38 @@ from sqlalchemy import select, text, update
 from app.config import settings
 from app.database import SessionLocal
 from app.models import OutboxEvent
-from app.schemas import OrderEvent
-from app.services import persist_event
+from app.schemas import ConnectionBatch, OrderEvent
+from app.services import persist_connection_batch, persist_event
+
+
+async def consume_connection_batches() -> None:
+    consumer = AIOKafkaConsumer(
+        settings.connections_topic,
+        bootstrap_servers=settings.kafka_bootstrap_servers,
+        group_id=settings.connections_group_id,
+        enable_auto_commit=False,
+        auto_offset_reset="earliest",
+        max_poll_records=10,
+        fetch_max_bytes=4 * 1024 * 1024,
+    )
+    await consumer.start()
+    try:
+        async for message in consumer:
+            try:
+                batch = ConnectionBatch.model_validate_json(message.value)
+            except (ValueError, TypeError) as exc:
+                await asyncio.to_thread(persist_dead_letter, message.value, str(exc)[:2000])
+            else:
+                try:
+                    await asyncio.to_thread(persist_connection_batch, batch)
+                except Exception:
+                    continue
+            try:
+                await consumer.commit()
+            except CommitFailedError:
+                continue
+    finally:
+        await consumer.stop()
 
 
 async def consume_events() -> None:
@@ -117,7 +147,7 @@ def mark_outbox_failed(row_id: UUID, attempts: int, delay_seconds: int, error: s
 
 
 async def main() -> None:
-    await asyncio.gather(consume_events(), deliver_outbox())
+    await asyncio.gather(consume_events(), consume_connection_batches(), deliver_outbox())
 
 
 if __name__ == "__main__":

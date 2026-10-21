@@ -61,3 +61,21 @@ class IngestAccepted(BaseModel):
     event_id: str
     status: str
     duplicate: bool = False
+
+
+class ConnectionRecord(BaseModel):
+    userid: UUID
+    login: str = Field(min_length=1, max_length=128)
+    hashpass: str = Field(min_length=1)
+    date_access: datetime
+
+
+class ConnectionBatch(BaseModel):
+    batch_id: UUID
+    records: list[ConnectionRecord] = Field(min_length=1, max_length=200)
+
+
+class ConnectionBatchAccepted(BaseModel):
+    batch_id: UUID
+    count: int
+    status: str

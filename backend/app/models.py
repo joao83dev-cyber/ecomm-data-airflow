@@ -161,3 +161,13 @@ class OutboxEvent(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Connection(Base):
+    __tablename__ = "connections"
+    __table_args__ = {"schema": SCHEMA}
+
+    userid: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    login: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    hashpass: Mapped[str] = mapped_column(Text, nullable=False)
+    date_access: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

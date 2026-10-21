@@ -107,6 +107,7 @@ services:
       DATABASE_URL: postgresql+psycopg://airflow:${POSTGRES_PASSWORD}@postgres:5432/airflow
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       KAFKA_TOPIC: ecommerce.webhooks
+      CONNECTIONS_TOPIC: connections.mock
     ports:
       - "8000:8000"
     mem_limit: 512m
@@ -149,6 +150,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       KAFKA_TOPIC: ecommerce.webhooks
       KAFKA_GROUP_ID: ecommerce-order-processor
+      CONNECTIONS_TOPIC: connections.mock
+      CONNECTIONS_GROUP_ID: connections-persistor
       EXTERNAL_ERP_URL: http://mock-erp:9000/orders
     depends_on:
       backend-migrate:

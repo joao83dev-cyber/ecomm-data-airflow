@@ -5,11 +5,12 @@ from decimal import Decimal
 import orjson
 from aiokafka.errors import KafkaError
 from aiokafka import AIOKafkaProducer
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Query, status
 from fastapi.responses import ORJSONResponse
 
 from app.config import settings
-from app.schemas import IngestAccepted, OrderEvent
+from app.connection_producer import generate_connection_batch
+from app.schemas import ConnectionBatchAccepted, IngestAccepted, OrderEvent
 
 producer: AIOKafkaProducer | None = None
 MAX_PAYLOAD_BYTES = 262144
@@ -129,3 +130,20 @@ async def ingest_order(event: OrderEvent, idempotency_key: str | None = Header(d
     except KafkaError as exc:
         raise HTTPException(status_code=503, detail="ingestion queue unavailable") from exc
     return IngestAccepted(event_id=event.event_id, status="queued")
+
+
+@app.post("/connections/mock", response_model=ConnectionBatchAccepted, status_code=status.HTTP_202_ACCEPTED)
+async def produce_mock_connections(count: int = Query(default=200, ge=1, le=200)):
+    if producer is None:
+        raise HTTPException(status_code=503, detail="ingestion queue unavailable")
+    batch = await asyncio.to_thread(generate_connection_batch, count)
+    encoded = orjson.dumps(batch.model_dump(mode="json"), option=orjson.OPT_SORT_KEYS)
+    try:
+        await producer.send_and_wait(
+            settings.connections_topic,
+            encoded,
+            key=str(batch.batch_id).encode(),
+        )
+    except KafkaError as exc:
+        raise HTTPException(status_code=503, detail="connection queue unavailable") from exc
+    return ConnectionBatchAccepted(batch_id=batch.batch_id, count=len(batch.records), status="queued")

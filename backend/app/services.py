@@ -6,8 +6,18 @@ from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.database import SessionLocal
-from app.models import Address, Client, Invoice, Order, OrderItem, OrderEventHistory, OutboxEvent, Payment, ProcessedEvent
-from app.schemas import OrderEvent
+from app.models import Address, Client, Connection, Invoice, Order, OrderItem, OrderEventHistory, OutboxEvent, Payment, ProcessedEvent
+from app.schemas import ConnectionBatch, OrderEvent
+
+
+def persist_connection_batch(batch: ConnectionBatch) -> int:
+    """Insert a connection batch atomically; duplicate IDs/logins are ignored on replay."""
+    rows = [record.model_dump() for record in batch.records]
+    with SessionLocal.begin() as session:
+        result = session.execute(
+            insert(Connection).values(rows).on_conflict_do_nothing()
+        )
+        return result.rowcount or 0
 
 
 def persist_event(event: OrderEvent) -> bool:
